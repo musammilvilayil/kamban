@@ -1,17 +1,24 @@
-import { Clock3, UserRound, X } from "lucide-react";
+import { CalendarDays, UserRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
+
+const toDateInputValue = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+};
 
 function TaskFormModal({ open, mode = "create", initialTask, onClose, onSubmit, loading = false }) {
   const [title, setTitle] = useState("");
   const [assignee, setAssignee] = useState("Unassigned");
-  const [timeTracking, setTimeTracking] = useState("");
+  const [deadline, setDeadline] = useState("");
   const [validationError, setValidationError] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setTitle(initialTask?.title || "");
     setAssignee(initialTask?.assignee || "Unassigned");
-    setTimeTracking(initialTask?.timeTracking || "");
+    setDeadline(toDateInputValue(initialTask?.deadline));
     setValidationError("");
   }, [open, initialTask]);
 
@@ -38,7 +45,7 @@ function TaskFormModal({ open, mode = "create", initialTask, onClose, onSubmit, 
     await onSubmit({
       title: cleanTitle,
       assignee: assignee.trim() || "Unassigned",
-      timeTracking: timeTracking.trim(),
+      deadline: deadline || null,
     });
   };
 
@@ -71,10 +78,10 @@ function TaskFormModal({ open, mode = "create", initialTask, onClose, onSubmit, 
           </div>
 
           <div>
-            <label htmlFor="task-time" className="mb-1.5 block text-sm font-semibold text-slate-700">Time tracking <span className="font-normal text-slate-400">(optional)</span></label>
+            <label htmlFor="task-deadline" className="mb-1.5 block text-sm font-semibold text-slate-700">Deadline <span className="font-normal text-slate-400">(optional)</span></label>
             <div className="relative">
-              <Clock3 size={17} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input id="task-time" value={timeTracking} onChange={(event) => setTimeTracking(event.target.value)} placeholder="e.g. 2h / 4h" className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-[16px] outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-4 focus:ring-violet-100 sm:text-sm" />
+              <CalendarDays size={17} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input id="task-deadline" type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-[16px] outline-none transition focus:border-violet-400 focus:ring-4 focus:ring-violet-100 sm:text-sm" />
             </div>
           </div>
 
