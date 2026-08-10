@@ -3,7 +3,8 @@ import OpenAI from "openai";
 import Task from "../../server/models/Task.js";
 
 const STATUSES = ["TO DO", "IN PROGRESS", "PAUSED", "SUBMITTED", "APPROVED"];
-const allowedTaskFields = ["title", "assignee", "status", "date", "timeTracking"];
+const allowedTaskFields = ["title", "assignee", "status", "date", "deadline"];
+const weekdays = { sunday:0, monday:1, tuesday:2, wednesday:3, thursday:4, friday:5, saturday:6 };
 
 const json = (statusCode, body) => ({
   statusCode,
@@ -34,38 +35,49 @@ const parseBody = (event) => {
   const raw = event.isBase64Encoded
     ? Buffer.from(event.body, "base64").toString("utf8")
     : event.body;
-
   if (typeof raw === "object") return raw;
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    throw Object.assign(new Error("Request body must be valid JSON"), { statusCode: 400 });
-  }
+  try { return JSON.parse(raw); }
+  catch { throw Object.assign(new Error("Request body must be valid JSON"), { statusCode: 400 }); }
 };
 
 const cleanTaskPayload = (body) => {
   const payload = Object.fromEntries(
     Object.entries(body || {}).filter(([key]) => allowedTaskFields.includes(key)),
   );
-
   if (typeof payload.title === "string") payload.title = payload.title.trim();
   if (typeof payload.assignee === "string") payload.assignee = payload.assignee.trim() || "Unassigned";
-  if (typeof payload.timeTracking === "string") payload.timeTracking = payload.timeTracking.trim();
-
+  if (payload.deadline === "") payload.deadline = null;
   return payload;
+};
+
+const toYmd = (date) => date.toISOString().slice(0,10);
+const resolveRelativeDeadline = (prompt) => {
+  const text = String(prompt || "").toLowerCase();
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  if (/\bby tomorrow\b|\btomorrow\b/.test(text)) {
+    const d = new Date(today); d.setUTCDate(d.getUTCDate()+1); return toYmd(d);
+  }
+
+  const match = text.match(/\b(?:by|before|on)\s+(?:next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
+  if (match) {
+    const target = weekdays[match[1]];
+    let diff = (target - today.getUTCDay() + 7) % 7;
+    if (diff === 0) diff = 7;
+    const d = new Date(today); d.setUTCDate(d.getUTCDate()+diff); return toYmd(d);
+  }
+
+  return null;
 };
 
 export const handler = async (event) => {
   try {
     const method = (event.httpMethod || "GET").toUpperCase();
     const path = getPath(event);
-
     await connectDatabase();
 
-    if (method === "GET" && path === "/api/health") {
-      return json(200, { status: "ok" });
-    }
+    if (method === "GET" && path === "/api/health") return json(200, { status: "ok" });
 
     if (method === "GET" && path === "/api/tasks") {
       const tasks = await Task.find().sort({ createdAt: -1 }).lean();
@@ -75,10 +87,7 @@ export const handler = async (event) => {
     if (method === "POST" && path === "/api/tasks") {
       const payload = cleanTaskPayload(parseBody(event));
       if (!payload.title) return json(400, { message: "Task title is required" });
-      if (payload.status && !STATUSES.includes(payload.status)) {
-        return json(400, { message: "Invalid task status" });
-      }
-
+      if (payload.status && !STATUSES.includes(payload.status)) return json(400, { message: "Invalid task status" });
       const task = await Task.create({
         ...payload,
         assignee: payload.assignee || "Unassigned",
@@ -91,12 +100,8 @@ export const handler = async (event) => {
     if (taskMatch && method === "PUT") {
       const payload = cleanTaskPayload(parseBody(event));
       if (!Object.keys(payload).length) return json(400, { message: "No valid task fields supplied" });
-      if (payload.status && !STATUSES.includes(payload.status)) {
-        return json(400, { message: "Invalid task status" });
-      }
-      if (Object.prototype.hasOwnProperty.call(payload, "title") && !payload.title) {
-        return json(400, { message: "Task title is required" });
-      }
+      if (payload.status && !STATUSES.includes(payload.status)) return json(400, { message: "Invalid task status" });
+      if (Object.prototype.hasOwnProperty.call(payload, "title") && !payload.title) return json(400, { message: "Task title is required" });
 
       const task = await Task.findByIdAndUpdate(
         taskMatch[1],
@@ -119,6 +124,7 @@ export const handler = async (event) => {
       if (!cleanPrompt) return json(400, { message: "Prompt is required" });
       if (!process.env.OPENAI_API_KEY) return json(500, { message: "OPENAI_API_KEY is missing" });
 
+      const today = new Date().toISOString().slice(0,10);
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -127,7 +133,7 @@ export const handler = async (event) => {
         messages: [
           {
             role: "system",
-            content: 'Convert the user request into one task. Return JSON only with this exact shape: {"taskTitle":"...","assignee":"..."}. Use "Unassigned" when no assignee is clearly provided. Keep taskTitle concise and actionable.',
+            content: `Today is ${today}. Convert the request into one task. Return JSON only as {"taskTitle":"...","assignee":"...","deadline":"YYYY-MM-DD or null"}. Deadline wording such as "by Monday" must NOT appear in taskTitle. Use "Unassigned" if no assignee is named. A weekday deadline always means the next future occurrence; if today is Monday, "by Monday" means the Monday 7 days later.`,
           },
           { role: "user", content: cleanPrompt },
         ],
@@ -137,17 +143,16 @@ export const handler = async (event) => {
       if (!content) return json(502, { message: "AI returned an empty response" });
 
       let parsed;
-      try {
-        parsed = JSON.parse(content);
-      } catch {
-        return json(502, { message: "AI returned invalid JSON" });
-      }
+      try { parsed = JSON.parse(content); }
+      catch { return json(502, { message: "AI returned invalid JSON" }); }
 
       const taskTitle = String(parsed.taskTitle || "").trim();
       const assignee = String(parsed.assignee || "Unassigned").trim() || "Unassigned";
+      const deterministicDeadline = resolveRelativeDeadline(cleanPrompt);
+      const deadline = deterministicDeadline || (parsed.deadline ? String(parsed.deadline).slice(0,10) : null);
       if (!taskTitle) return json(502, { message: "AI did not return a task title" });
 
-      const task = await Task.create({ title: taskTitle, assignee, status: "TO DO" });
+      const task = await Task.create({ title: taskTitle, assignee, deadline, status: "TO DO" });
       return json(201, task);
     }
 
