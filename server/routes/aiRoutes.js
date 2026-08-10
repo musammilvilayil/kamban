@@ -3,10 +3,16 @@ import OpenAI from "openai";
 import Task from "../models/Task.js";
 
 const router = express.Router();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const weekdays = { sunday:0, monday:1, tuesday:2, wednesday:3, thursday:4, friday:5, saturday:6 };
 const toYmd = (date) => date.toISOString().slice(0,10);
+
+const getOpenAI = () => {
+  if (!process.env.OPENAI_API_KEY) {
+    throw Object.assign(new Error("OPENAI_API_KEY is missing from server/.env"), { statusCode: 500 });
+  }
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+};
 
 const resolveRelativeDeadline = (prompt) => {
   const text = prompt.toLowerCase();
@@ -33,6 +39,7 @@ router.post("/parse", async (req, res) => {
     const prompt = req.body?.prompt?.trim();
     if (!prompt) return res.status(400).json({ message: "Prompt is required" });
 
+    const openai = getOpenAI();
     const today = new Date().toISOString().slice(0,10);
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -61,7 +68,7 @@ router.post("/parse", async (req, res) => {
     res.status(201).json(task);
   } catch (error) {
     console.error("AI parse error:", error);
-    res.status(500).json({ message: "Failed to parse task with AI", error: error.message });
+    res.status(error.statusCode || 500).json({ message: "Failed to parse task with AI", error: error.message });
   }
 });
 
