@@ -1,10 +1,9 @@
 import Task from "../models/Task.js";
 
-const allowedUpdates = ["title", "assignee", "status", "date", "timeTracking"];
+const allowedUpdates = ["title", "assignee", "status", "date", "deadline"];
 
 export const getTasks = async (_req, res) => {
   try {
-    // Always return the latest persisted state after drag-and-drop updates.
     res.set("Cache-Control", "no-store");
     const tasks = await Task.find().sort({ createdAt: -1 }).lean();
     res.status(200).json(tasks);
