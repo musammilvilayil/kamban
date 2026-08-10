@@ -21,7 +21,10 @@ const request = async (path, options = {}) => {
     : null;
 
   if (!response.ok) {
-    if (data?.message) throw new Error(data.message);
+    if (data?.message) {
+      const details = data?.error ? `: ${data.error}` : "";
+      throw new Error(`${data.message}${details}`);
+    }
     if (response.status === 404) throw new Error("API route not found. The backend deployment needs to be updated.");
     if (response.status >= 500) throw new Error("Server error. Check the database/API deployment configuration.");
     throw new Error(`Request failed (${response.status})`);
